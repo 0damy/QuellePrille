@@ -1,0 +1,3 @@
+MODE: Creative
+GOAL: Rewrite using vivid vocabulary, varied sentence rhythm, and imaginative structural phrasing.
+CONSTRAINT: Do not introduce fabricated facts, false metaphors that distort technical claims, or altered propositions. Target approximately 90-110% of source word length.

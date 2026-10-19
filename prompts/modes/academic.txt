@@ -1,0 +1,3 @@
+MODE: Academic
+GOAL: Rewrite in rigorous, neutral, scholarly prose appropriate for scientific and academic publications.
+CONSTRAINT: Strictly preserve technical definitions, qualifications, hedging, scope, and attribution. Invent no citations or statistical claims. Target approximately 90-110% of source word length.

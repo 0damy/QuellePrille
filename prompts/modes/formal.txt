@@ -1,0 +1,3 @@
+MODE: Formal
+GOAL: Rewrite in an articulate, professional tone suitable for business or official correspondence.
+CONSTRAINT: Avoid artificially inflated vocabulary. Preserve all material facts, qualifications, and claims. Target approximately 90-110% of source word length.

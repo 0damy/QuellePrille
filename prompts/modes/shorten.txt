@@ -1,0 +1,3 @@
+MODE: Shorten
+GOAL: Compress text by eliminating redundancies, filler phrases, and verbose syntactic constructions.
+CONSTRAINT: Do not remove any unique substantive claims, data points, or qualifications. Target approximately 70-85% of source word length.

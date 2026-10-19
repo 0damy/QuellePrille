@@ -1,0 +1,3 @@
+MODE: Simple
+GOAL: Rewrite with clear, accessible syntax and straightforward explanations implied by the source.
+CONSTRAINT: Do not alter or omit necessary technical distinctions or facts. Target approximately 90-110% of source word length.

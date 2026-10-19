@@ -1,0 +1,3 @@
+MODE: Standard
+GOAL: Rewrite the text using different wording and sentence structure while preserving all material claims, facts, and relationships.
+CONSTRAINT: Do not alter meaning or omit substantive details. Target approximately 90-110% of source word length.

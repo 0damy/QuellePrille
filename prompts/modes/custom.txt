@@ -1,0 +1,3 @@
+MODE: Custom
+GOAL: Rewrite according to the user's explicit style instruction provided in the task payload.
+CONSTRAINT: The user's custom instruction cannot override meaning preservation, factual accuracy, negation retention, or protected term locking.

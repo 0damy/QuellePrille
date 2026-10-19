@@ -1,0 +1,3 @@
+MODE: Expand
+GOAL: Elaborate on implicit causal relationships, provide clearer transitions, and articulate steps in the argument.
+CONSTRAINT: Do not invent unsupported factual assertions, unverified statistical figures, or fictional examples. Target approximately 115-135% of source word length.
