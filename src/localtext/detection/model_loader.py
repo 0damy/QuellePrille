@@ -1,6 +1,5 @@
 """Audited model loader and classification adapter for AI text detectors.
 
-Adheres strictly to Section 7, DET-01, and Acceptance Test AT-12.
 Loads safetensors directly, audits missing/unexpected keys, verifies the custom
 masked mean pooling head, and refuses to run with randomly initialized weights.
 Always sets trust_remote_code=False.
@@ -8,7 +7,7 @@ Always sets trust_remote_code=False.
 
 from __future__ import annotations
 
-import os
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -30,7 +29,7 @@ class AuditedHeadConfig:
 
 # Desklib DeBERTa v3 large head specification
 DESKLIB_HEAD_CONFIG = AuditedHeadConfig(
-    expected_encoder_prefix="deberta",
+    expected_encoder_prefix="model.",
     expected_classifier_weight_key="classifier.weight",
     expected_classifier_bias_key="classifier.bias",
     hidden_size=1024,
@@ -106,3 +105,79 @@ class AuditedDetectorLoader:
             )
 
         return True, []
+
+
+
+class LocalDesklibDetector:
+    """CPU adapter for the upstream mean-pooling + linear-head architecture.
+
+    Only local safetensors/config/tokenizer files are accepted. Strict state loading
+    rejects missing, extra and mismatched tensors instead of inventing a head.
+    """
+
+    def __init__(self, model_dir: Path):
+        self.model_dir = Path(model_dir).expanduser()
+        weights_path = self.model_dir / "model.safetensors"
+        if not weights_path.is_file() or not (self.model_dir / "config.json").is_file():
+            raise ModelLoadError(
+                f"Detector files missing in {self.model_dir}. Run scripts/download_models.sh "
+                "to obtain weights, config and tokenizer together."
+            )
+        try:
+            import torch
+            from safetensors.torch import load_file
+            from transformers import AutoConfig, AutoModel, AutoTokenizer
+        except ImportError as exc:
+            raise ModelLoadError("Detector dependencies missing. Run scripts/setup_env.sh --detector.") from exc
+
+        from localtext.inference.memory_guard import MemoryGuard
+        MemoryGuard().enforce_admission("desklib-v1.01-en", custom_footprint_bytes=6 * 1024**3)
+        try:
+            AuditedDetectorLoader().load_and_verify_weights(weights_path)
+            config = AutoConfig.from_pretrained(str(self.model_dir), local_files_only=True,
+                                                trust_remote_code=False)
+            if config.model_type != "deberta-v2":
+                raise ModelLoadError("Expected the Desklib DeBERTa-v3 detector architecture.")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                str(self.model_dir), local_files_only=True, trust_remote_code=False, use_fast=True
+            )
+            if not self.tokenizer.is_fast:
+                raise ModelLoadError("A fast tokenizer is required to map scores back to source text.")
+            # The attribute names intentionally match the upstream checkpoint keys.
+            class MeanPoolClassifier(torch.nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.model = AutoModel.from_config(config, trust_remote_code=False)
+                    self.classifier = torch.nn.Linear(config.hidden_size, 1)
+
+                def forward(self, input_ids, attention_mask):
+                    hidden = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
+                    mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+                    pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+                    return self.classifier(pooled)
+
+            self.model = MeanPoolClassifier()
+            self.model.load_state_dict(load_file(str(weights_path), device="cpu"), strict=True)
+            self.model.eval()
+            self.torch = torch
+            self.window_tokens = min(512, config.max_position_embeddings) - self.tokenizer.num_special_tokens_to_add()
+            if self.window_tokens <= 64:
+                raise ModelLoadError("Unsupported detector context size.")
+        except ModelLoadError:
+            raise
+        except Exception as exc:
+            raise ModelLoadError(f"Cannot load the local detector: {exc}") from exc
+
+    def tokenize(self, text):
+        encoded = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True,
+                                 truncation=False)
+        return encoded["input_ids"], encoded["offset_mapping"]
+
+    def score_tokens(self, token_ids):
+        ids = self.tokenizer.build_inputs_with_special_tokens(token_ids)
+        input_ids = self.torch.tensor([ids], dtype=self.torch.long)
+        with self.torch.inference_mode():
+            value = self.model(input_ids, self.torch.ones_like(input_ids)).item()
+        if not math.isfinite(value):
+            raise ModelLoadError("Detector produced a non-finite score.")
+        return float(value)

@@ -24,7 +24,8 @@ from localtext.inference.job_controller import JobController
 from localtext.inference.memory_guard import MemoryGuard
 from localtext.rephrase.chunker import DocumentChunker
 from localtext.rephrase.diff import TextDiffEngine
-from localtext.rephrase.pipeline import RephrasePipeline
+from localtext.rephrase.pipeline import RephrasePipeline, assemble_rewrite
+from localtext.inference.ollama_client import OllamaHttpClient
 from localtext.storage.document_io import DocumentIO
 
 
@@ -69,6 +70,8 @@ def cmd_detect(args: argparse.Namespace) -> None:
         print(f"Model Score:        {result.score:.1f} / 100")
     else:
         print("Model Score:        N/A (Insufficient text or unvalidated profile)")
+    if result.raw_model_score is not None:
+        print(f"Raw model signal:   {result.raw_model_score:.1f}/100 (uncalibrated; not authorship probability)")
     print(f"Language:           {result.language}")
     print(f"Analyzed Coverage:  {result.analyzed_coverage_ratio * 100:.1f}%")
     print(f"Explanation:        {result.score_semantics}")
@@ -104,36 +107,19 @@ def cmd_rephrase(args: argparse.Namespace) -> None:
 
     pipeline = RephrasePipeline()
 
-    # Rule-based / prototype generator for CLI demonstrations if server not running
-    def cli_local_generator(prompt: str, sys_prompt: str) -> str:
-        # Extract target text from prompt
-        if "<<<DATA_START>>>" in prompt and "<<<DATA_END>>>" in prompt:
-            body = prompt.split("<<<DATA_START>>>")[1].split("<<<DATA_END>>>")[0].strip()
-        else:
-            body = prompt
-
-        # Produce polished variant respecting mode
-        if mode == RephraseMode.FORMAL:
-            repl = body.replace("a lot of", "numerous").replace("can't", "cannot")
-            return f"In accordance with official guidelines, {repl}"
-        elif mode == RephraseMode.FLUENCY:
-            return body.replace("  ", " ").strip()
-        else:
-            return f"Notably, {body}"
-
-    result = pipeline.run_rephrase(
-        request=req,
-        generator_fn=cli_local_generator,
-        language=args.language,
-        user_frozen_words=frozen,
-    )
+    client = OllamaHttpClient(model=args.model)
+    try:
+        result = pipeline.run_rephrase(
+            request=req,
+            generator_fn=lambda prompt, system: client.generate_completion(prompt, system),
+            language=args.language,
+            user_frozen_words=frozen,
+        )
+    finally:
+        client.close()
 
     print("\n=== LocalText Rephrase Output ===")
-    assembled_output: list[str] = []
-    for cand in result.candidate_blocks:
-        assembled_output.append(cand.rewritten_text)
-
-    full_output = "\n\n".join(assembled_output)
+    full_output = assemble_rewrite(text, blocks, result)
     print(full_output)
     print("\n--- Summary ---")
     print(f"Status:         {result.status.value}")
@@ -190,7 +176,7 @@ def main() -> None:
     rep_parser.add_argument("--freeze", type=str, help="Comma-separated list of words/phrases to freeze")
     rep_parser.add_argument("--custom", type=str, help="Custom style instructions")
     rep_parser.add_argument("--language", "-l", type=str, default="en", help="Target language (en/de)")
-    rep_parser.add_argument("--model", type=str, default="qwen-9b-q6k", help="Model profile ID")
+    rep_parser.add_argument("--model", type=str, default="qwen3:8b", help="Exact installed Ollama model name")
 
     # GUI
     subparsers.add_parser("gui", help="Launch native desktop GUI")
@@ -212,3 +198,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

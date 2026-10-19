@@ -1,46 +1,31 @@
-"""Native Qt desktop application for LocalText.
-
-Adheres strictly to APP-01 through APP-09, DET-01 through DET-10, REP-01 through REP-11,
-and Acceptance Tests AT-03, AT-04, AT-06, AT-10, AT-11.
-Provides two distinct workspaces:
-1. Detect: AI detection score, uncertainty, passage feedback, and validation scope.
-2. Rephrase: side-by-side editing, 10 modes, freeze words, change controls, word diffs, block accept/reject.
-3. Settings: hardware memory headroom, XDG data paths, explicit session clearing.
-Uses QThread workers to guarantee the GUI remains 100% responsive during generation (APP-04, AT-10).
-"""
+"""Native Qt UI with one background job and explicit local model settings."""
 
 from __future__ import annotations
 
-import re
-import sys
+import os
+from pathlib import Path
 import threading
-from typing import Optional
 from localtext.contracts import (
     ChangeStrength,
-    DetectorLabel,
+    JobState,
     RephraseMode,
     RewriteRequest,
-    RewriteResult,
-    TargetBlock,
-    TextSpan,
 )
 from localtext.detection.pipeline import DetectionPipeline
-from localtext.inference.job_controller import JobController
+from localtext.config import get_models_dir
+from localtext.inference.ollama_client import OllamaHttpClient
 from localtext.inference.memory_guard import MemoryGuard
 from localtext.rephrase.chunker import DocumentChunker
 from localtext.rephrase.diff import TextDiffEngine
-from localtext.rephrase.pipeline import RephrasePipeline
-from localtext.storage.document_io import DocumentIO
+from localtext.rephrase.pipeline import RephrasePipeline, assemble_rewrite
 from localtext.storage.document_state import DocumentStateManager
 from localtext.storage.session_manager import SessionManager
 
 
 def create_qt_app() -> "MainWindow":
     """Instantiate the Qt Application and MainWindow."""
-    from PySide6.QtCore import QObject, QThread, Qt, Signal
-    from PySide6.QtGui import QAction, QFont, QIcon
+    from PySide6.QtCore import QThread, Qt, Signal, QSettings
     from PySide6.QtWidgets import (
-        QApplication,
         QComboBox,
         QHBoxLayout,
         QLabel,
@@ -56,132 +41,19 @@ def create_qt_app() -> "MainWindow":
         QWidget,
     )
 
-    class RephraseWorker(QThread):
-        finished_signal = Signal(object)
-        error_signal = Signal(str)
+    class Worker(QThread):
+        result_ready = Signal(object)
+        error = Signal(str)
 
-        def __init__(
-            self,
-            pipeline: RephrasePipeline,
-            request: RewriteRequest,
-            language: str,
-            frozen_words: list[str],
-            cancel_event: threading.Event,
-        ):
+        def __init__(self, action):
             super().__init__()
-            self.pipeline = pipeline
-            self.request = request
-            self.language = language
-            self.frozen_words = frozen_words
-            self.cancel_event = cancel_event
+            self.action = action
 
         def run(self):
             try:
-                from localtext.inference.llama_client import LlamaHttpClient
-                from localtext.inference.ollama_client import OllamaHttpClient
-
-                # Priority: llama-server on 8080, then ollama on 11434
-                active_client = None
-                backend_name = "none"
-
-                client_llama = LlamaHttpClient("http://127.0.0.1:8080")
-                if client_llama.is_reachable():
-                    active_client = client_llama
-                    backend_name = "llama-server"
-                else:
-                    client_ollama = OllamaHttpClient("http://127.0.0.1:11434")
-                    if client_ollama.is_reachable():
-                        active_client = client_ollama
-                        backend_name = "ollama"
-
-                if active_client is not None:
-                    # Full local neural model generation
-                    def generator_fn(prompt: str, sys_prompt: str) -> str:
-                        return active_client.generate_completion(
-                            prompt=prompt,
-                            system_prompt=sys_prompt,
-                            cancel_event=self.cancel_event,
-                        )
-                else:
-                    # Local rule-based fallback — no LLM server running
-                    def generator_fn(prompt: str, sys_prompt: str) -> str:  # type: ignore[misc]
-                        # Extract only the text from between the data delimiters
-                        if "<<<DATA_START>>>" in prompt and "<<<DATA_END>>>" in prompt:
-                            body = prompt.split("<<<DATA_START>>>")[1].split("<<<DATA_END>>>")[0].strip()
-                        else:
-                            body = prompt
-
-                        mode_val = (
-                            self.request.mode.value
-                            if hasattr(self.request.mode, "value")
-                            else str(self.request.mode).lower()
-                        )
-
-                        # German vocabulary and flow transformations (case-insensitive where needed)
-                        if self.language == "de":
-                            import re as _re
-                            res = body
-                            subs_de = [
-                                (r"\bgroßen Mengen von\b", "erheblichen Volumina an"),
-                                (r"\bgroße Mengen von\b", "erhebliche Volumina an"),
-                                (r"\bgroße Mengen\b", "substanzielle Volumina"),
-                                (r"\bin Frage\b", "zur Debatte"),
-                                (r"\bDas Nutzen von einem\b", "Die Verwendung eines"),
-                                (r"\bDas Nutzen von\b", "Die Nutzung von"),
-                                (r"\bbietet einen Ansatz\b", "eröffnet die Möglichkeit"),
-                                (r"\bwichtig ist\b", "von zentraler Bedeutung ist"),
-                                (r"\bgarantiert jedoch nicht automatisch\b", "gewährleistet indes keineswegs"),
-                                (r"\bhabe ich die Motivation\b", "besteht das Ziel"),
-                                (r"\bdie Motivation, die Möglichekeite\b", "Ziel, die Möglichkeiten"),
-                                (r"\bdie Möglichekeite\b", "die Möglichkeiten"),
-                                (r"\bzur digitalen Souveränität\b", "hinsichtlich der informationellen Selbstbestimmung"),
-                                (r"\bVerschiedenen Behörden\b", "verschiedenen Behörden"),
-                                (r"\bAbhängigkeit vom Anbieter\b", "Herstellerabhängigkeit"),
-                                (r"\beinschränkt die Handlungsfreiheit\b", "begrenzt die Entscheidungsfreiheit"),
-                                (r"\bzu verringern\b", "zu reduzieren"),
-                                (r"\bvollständig erhalten bleiben\b", "vollständig gewahrt bleiben"),
-                            ]
-                            for pattern, replacement in subs_de:
-                                res = _re.sub(pattern, replacement, res)
-                            if mode_val == "formal":
-                                res = "Im Kontext der öffentlichen Verwaltung: " + res
-                            elif mode_val == "academic":
-                                res = "Aus verwaltungswissenschaftlicher Perspektive: " + res
-                            return res
-                        else:
-                            import re as _re
-                            res = body
-                            subs_en = [
-                                (r"\blarge volumes of\b", "substantial volumes of"),
-                                (r"\ba lot of\b", "numerous"),
-                                (r"\bcan't\b", "cannot"),
-                                (r"\bin this context\b", "within this framework"),
-                                (r"\boffers? (?:a )?potential approach\b", "provides a viable methodology"),
-                                (r"\bdoes not automatically guarantee\b", "by no means ensures"),
-                                (r"\bI have been motivated to\b", "the objective is to"),
-                                (r"\bvendor lock-in\b", "supplier dependency"),
-                                (r"\bfreedom of action\b", "operational autonomy"),
-                                (r"\bopen document format\b", "open documentation standard", re.IGNORECASE),
-                            ]
-                            for entry in subs_en:
-                                flags = entry[2] if len(entry) > 2 else 0
-                                res = _re.sub(entry[0], entry[1], res, flags=flags)
-                            if mode_val == "formal":
-                                res = "In institutional administrative contexts, " + res
-                            elif mode_val == "academic":
-                                res = "In scholarly analysis, " + res
-                            return res
-
-                result = self.pipeline.run_rephrase(
-                    request=self.request,
-                    generator_fn=generator_fn,
-                    cancel_event=self.cancel_event,
-                    language=self.language,
-                    user_frozen_words=self.frozen_words,
-                )
-                self.finished_signal.emit(result)
-            except Exception as e:
-                self.error_signal.emit(str(e))
+                self.result_ready.emit(self.action())
+            except Exception as exc:
+                self.error.emit(str(exc))
 
     class MainWindow(QMainWindow):
         def __init__(self):
@@ -191,10 +63,14 @@ def create_qt_app() -> "MainWindow":
 
             self.doc_state = DocumentStateManager()
             self.session_mgr = SessionManager()
-            self.controller = JobController()
+            self.settings = QSettings("LocalText", "LocalText")
             self.diff_engine = TextDiffEngine()
 
-            self._active_worker: Optional[RephraseWorker] = None
+            self._active_worker = None
+            self._close_when_finished = False
+            self._pending_output = None
+            self._rewrite_source = ""
+            self._rewrite_blocks = []
             self._cancel_event = threading.Event()
 
             self._init_ui()
@@ -273,6 +149,9 @@ def create_qt_app() -> "MainWindow":
             controls.addWidget(self.rephrase_btn)
 
             layout.addLayout(controls)
+            self.custom_style = QLineEdit()
+            self.custom_style.setPlaceholderText("Instructions for Custom mode")
+            layout.addWidget(self.custom_style)
 
             # Side-by-side editor splitter (REP-03)
             splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -312,7 +191,8 @@ def create_qt_app() -> "MainWindow":
             btn_box = QHBoxLayout()
             self.accept_btn = QPushButton("Accept Changes")
             self.accept_btn.clicked.connect(self._on_accept_clicked)
-            self.reject_btn = QPushButton("Reject / Undo")
+            self.accept_btn.setEnabled(False)
+            self.reject_btn = QPushButton("Reject")
             self.reject_btn.clicked.connect(self._on_reject_clicked)
             btn_box.addWidget(self.accept_btn)
             btn_box.addWidget(self.reject_btn)
@@ -354,7 +234,9 @@ def create_qt_app() -> "MainWindow":
             res_layout = QVBoxLayout(res_box)
             self.detect_score_lbl = QLabel("<b>Status:</b> Not analyzed")
             self.detect_score_lbl.setStyleSheet("font-size: 14px; padding: 8px;")
-            self.detect_details_lbl = QLabel("Model: desklib-v1.01-en (Experimental profile, English)")
+            self.detect_details_lbl = QLabel("Desklib: English only. No locally validated accuracy or calibration.")
+            self.detect_details_lbl.setWordWrap(True)
+            self.detect_details_lbl.setTextFormat(Qt.TextFormat.PlainText)
             res_layout.addWidget(self.detect_score_lbl)
             res_layout.addWidget(self.detect_details_lbl)
             layout.addWidget(res_box)
@@ -369,11 +251,21 @@ def create_qt_app() -> "MainWindow":
             avail = guard.get_available_memory_bytes() / (1024**3)
 
             layout.addWidget(QLabel("<h3>System & Privacy Settings</h3>"))
-            layout.addWidget(QLabel(f"<b>Available Host Memory:</b> {avail:.2f} GiB (Minimum OS Headroom: 6.0 GiB)"))
-            layout.addWidget(QLabel("<b>Rephrasing Model Baseline:</b> Qwen 3.5 9B (Q6_K GGUF, ~10.5 GiB peak)"))
-            layout.addWidget(QLabel("<b>Detection Model Baseline:</b> Desklib AI Detector v1.01 (DeBERTa-v3-large)"))
-            layout.addWidget(QLabel("<b>Network Policy:</b> Zero runtime external requests (Fully offline)"))
-
+            layout.addWidget(QLabel(f"<b>Available Host Memory:</b> {avail:.2f} GiB"))
+            layout.addWidget(QLabel("Ollama model: use the exact local name shown by `ollama list`."))
+            self.model_input = QLineEdit(str(self.settings.value(
+                "ollama_model", os.environ.get("LOCALTEXT_OLLAMA_MODEL", "qwen3:8b"))))
+            layout.addWidget(self.model_input)
+            layout.addWidget(QLabel("Detector folder (weights, config and tokenizer):"))
+            self.detector_path = QLineEdit(str(self.settings.value(
+                "detector_path", str(get_models_dir() / "desklib"))))
+            layout.addWidget(self.detector_path)
+            privacy = QLabel("Runtime uses local Ollama and local detector files. "
+                             "Model downloads are a separate setup step. "
+                             "Run Ollama with OLLAMA_NO_CLOUD=1. "
+                             "Preservation checks are heuristic: review every rewrite." )
+            privacy.setWordWrap(True)
+            layout.addWidget(privacy)
             layout.addSpacing(20)
             clear_session_btn = QPushButton("Clear Saved Session & Text Buffers")
             clear_session_btn.clicked.connect(self._on_clear_session_clicked)
@@ -382,123 +274,198 @@ def create_qt_app() -> "MainWindow":
             layout.addStretch(1)
             return widget
 
+        def _clear_rewrite(self):
+            self._pending_output = None
+            self.doc_state.latest_rewrite_result = None
+            self.accept_btn.setEnabled(False)
+            self.out_edit.clear()
+            self.out_word_lbl.setText("0 words")
+
         def _on_src_text_changed(self):
             text = self.src_edit.toPlainText()
-            words = len(text.split())
-            self.src_word_lbl.setText(f"{words} words")
+            self.src_word_lbl.setText(f"{len(text.split())} words")
             self.doc_state.set_text(text)
+            self._clear_rewrite()
 
-        def _on_rephrase_clicked(self):
-            text = self.src_edit.toPlainText().strip()
-            if not text:
-                QMessageBox.warning(self, "Empty Input", "Please enter some text to rephrase.")
+        def _start_job(self, action, on_result, status):
+            if self._active_worker is not None:
                 return
-
-            self.status_lbl.setText("Rephrasing...")
-            self.progress_bar.setVisible(True)
-            self.cancel_btn.setEnabled(True)
-            self.rephrase_btn.setEnabled(False)
-
-            lang = str(self.lang_combo.currentData())
-            mode_raw = str(self.mode_combo.currentData())
-            strength_raw = str(self.strength_combo.currentData())
-            mode = RephraseMode(mode_raw.lower())
-            strength = ChangeStrength(strength_raw.lower())
-            frozen = [w.strip() for w in self.freeze_input.text().split(",") if w.strip()]
-
-            chunker = DocumentChunker()
-            blocks = chunker.create_target_blocks(text)
-            req = RewriteRequest(
-                job_id="gui-job",
-                snapshot_revision=self.doc_state.revision,
-                model_profile_id="qwen-9b-q6k",
-                mode=mode,
-                strength=strength,
-                target_blocks=tuple(blocks),
-            )
-
+            self._job_is_detection = on_result == self._on_detection_finished
             self._cancel_event.clear()
-            pipeline = RephrasePipeline()
-
-            # Execute in background QThread to keep GUI 100% responsive (APP-04, AT-10)
-            self._active_worker = RephraseWorker(
-                pipeline=pipeline,
-                request=req,
-                language=lang,
-                frozen_words=frozen,
-                cancel_event=self._cancel_event,
-            )
-            self._active_worker.finished_signal.connect(self._on_rephrase_finished)
-            self._active_worker.error_signal.connect(self._on_rephrase_error)
+            self.rephrase_btn.setEnabled(False)
+            self.detect_btn.setEnabled(False)
+            self.accept_btn.setEnabled(False)
+            self.settings_tab.setEnabled(False)
+            self.cancel_btn.setEnabled(True)
+            self.progress_bar.setVisible(True)
+            self.status_lbl.setText(status)
+            self._active_worker = Worker(action)
+            self._active_worker.result_ready.connect(on_result)
+            self._active_worker.error.connect(self._on_job_error)
+            self._active_worker.finished.connect(self._on_worker_stopped)
             self._active_worker.start()
 
-        def _on_rephrase_finished(self, result: RewriteResult):
-            self.progress_bar.setVisible(False)
-            self.cancel_btn.setEnabled(False)
+        def _on_worker_stopped(self):
+            worker = self._active_worker
+            self._active_worker = None
+            worker.deleteLater()
             self.rephrase_btn.setEnabled(True)
-            self.status_lbl.setText(f"Completed in {result.timings_ms.get('total_ms', 0):.1f} ms")
+            self.detect_btn.setEnabled(True)
+            self.settings_tab.setEnabled(True)
+            self.cancel_btn.setEnabled(False)
+            self.progress_bar.setVisible(False)
+            self.accept_btn.setEnabled(self._pending_output is not None and not self.doc_state.is_result_stale)
+            if self._close_when_finished:
+                self.close()
 
-            if self.doc_state.attach_rewrite_result(result):
-                html_diffs = [c.diff_html for c in result.candidate_blocks]
-                self.out_edit.setHtml("<br><br>".join(html_diffs))
-                out_words = sum(len(c.rewritten_text.split()) for c in result.candidate_blocks)
-                self.out_word_lbl.setText(f"{out_words} words")
+        def _on_rephrase_clicked(self):
+            if self._active_worker is not None:
+                return
+            text = self.src_edit.toPlainText()
+            if not text.strip():
+                QMessageBox.warning(self, "Empty Input", "Please enter some text to rephrase.")
+                return
+            try:
+                blocks = DocumentChunker().create_target_blocks(text)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Input", str(exc))
+                return
+            model = self.model_input.text().strip()
+            if not model:
+                QMessageBox.warning(self, "Model", "Enter a local Ollama model name in Settings.")
+                return
+            self.settings.setValue("ollama_model", model)
+            lang = str(self.lang_combo.currentData())
+            frozen = [w.strip() for w in self.freeze_input.text().split(",") if w.strip()]
+            req = RewriteRequest(
+                job_id="gui-rephrase", snapshot_revision=self.doc_state.revision,
+                model_profile_id=model, mode=RephraseMode(self.mode_combo.currentData()),
+                strength=ChangeStrength(self.strength_combo.currentData()),
+                custom_style=self.custom_style.text(), target_blocks=tuple(blocks),
+            )
+            self._clear_rewrite()
+            self._rewrite_source, self._rewrite_blocks = text, blocks
+            cancel_event = self._cancel_event
+
+            def action():
+                client = OllamaHttpClient(model=model)
+                try:
+                    return RephrasePipeline().run_rephrase(
+                        req, lambda prompt, system: client.generate_completion(
+                            prompt, system, cancel_event=cancel_event),
+                        cancel_event, language=lang, user_frozen_words=frozen,
+                    )
+                finally:
+                    client.close()
+
+            self._start_job(action, self._on_rephrase_finished, "Rephrasing with local Ollama…")
+
+        def _on_rephrase_finished(self, result):
+            if self._cancel_event.is_set() or result.status == JobState.CANCELLED:
+                self.status_lbl.setText("Cancelled; output discarded.")
+                return
+            if not self.doc_state.attach_rewrite_result(result):
+                self.status_lbl.setText("Source changed; stale rewrite discarded.")
+                return
+            try:
+                self._pending_output = assemble_rewrite(self._rewrite_source, self._rewrite_blocks, result)
+            except ValueError as exc:
+                self._clear_rewrite()
+                self._on_job_error(str(exc))
+                return
+            self.out_edit.setHtml(self.diff_engine.render_html_diff(self._rewrite_source, self._pending_output))
+            self.out_word_lbl.setText(f"{len(self._pending_output.split())} words")
+            if result.failed_checks:
+                self.status_lbl.setText("Partial: some blocks kept their original text after failed checks.")
+            elif result.warnings:
+                self.status_lbl.setText("Rewrite ready with preservation warnings; review before accepting.")
             else:
-                QMessageBox.warning(
-                    self,
-                    "Stale Result",
-                    "Source text was edited while rephrasing was active. Stale output was not applied (AT-11).",
-                )
+                self.status_lbl.setText("Rewrite ready for review.")
+            self.out_edit.setToolTip("\n".join(result.failed_checks + result.warnings))
 
-        def _on_rephrase_error(self, err_msg: str):
-            self.progress_bar.setVisible(False)
-            self.cancel_btn.setEnabled(False)
-            self.rephrase_btn.setEnabled(True)
-            self.status_lbl.setText("Rephrase error.")
-            QMessageBox.critical(self, "Rephrase Error", f"An error occurred during rephrase:\n{err_msg}")
+        def _on_job_error(self, message):
+            if getattr(self, "_job_is_detection", False):
+                self.detect_score_lbl.setText("Cancelled; no result." if self._cancel_event.is_set() else "Analysis failed; no score.")
+            if self._cancel_event.is_set():
+                self.status_lbl.setText("Cancelled; output discarded.")
+                return
+            self.status_lbl.setText("Job failed; source preserved.")
+            QMessageBox.critical(self, "LocalText", message)
 
         def _on_detect_clicked(self):
+            if self._active_worker is not None:
+                return
             text = self.detect_input.toPlainText()
             lang = str(self.detect_lang_combo.currentData())
-            pipeline = DetectionPipeline()
-            res = pipeline.run_detection("gui-detect", 1, text, language=lang)
+            path = self.detector_path.text().strip()
+            self.settings.setValue("detector_path", path)
+            self._detect_snapshot = (text, lang)
+            self.detect_score_lbl.setText("Loading / analyzing…")
+            self.detect_details_lbl.setText("")
+            cancel_event = self._cancel_event
+            self._start_job(
+                lambda: DetectionPipeline(model_dir=Path(path)).run_detection(
+                    "gui-detect", 1, text, language=lang, cancel_event=cancel_event),
+                self._on_detection_finished, "Analyzing locally on CPU…",
+            )
 
-            if res.label == DetectorLabel.INSUFFICIENT_TEXT:
-                self.detect_score_lbl.setText("<b>Status:</b> Insufficient text (< 150 words)")
-                self.detect_details_lbl.setText(res.score_semantics)
-            elif res.label == DetectorLabel.UNSUPPORTED_CONTENT:
-                self.detect_score_lbl.setText("<b>Status:</b> Unsupported content/language")
-                self.detect_details_lbl.setText(res.score_semantics)
+        def _on_detection_finished(self, result):
+            if self._cancel_event.is_set():
+                self.detect_score_lbl.setText("Cancelled; no result.")
+                self.status_lbl.setText("Cancelled; output discarded.")
+                return
+            if self._detect_snapshot != (self.detect_input.toPlainText(), self.detect_lang_combo.currentData()):
+                self.detect_score_lbl.setText("Text or language changed; analyze again.")
+                self.status_lbl.setText("Stale detection discarded.")
+                return
+            if result.raw_model_score is None:
+                self.detect_score_lbl.setText(result.label.value)
+                self.detect_details_lbl.setText(result.score_semantics)
             else:
-                score_str = f"{res.score:.1f}/100" if res.score is not None else "N/A"
-                self.detect_score_lbl.setText(f"<b>Signal:</b> {res.label.value} (Model Score: {score_str})")
-                self.detect_details_lbl.setText(f"{res.score_semantics} [Coverage: {res.analyzed_coverage_ratio*100:.1f}%]")
+                self.detect_score_lbl.setText(f"Raw model signal: {result.raw_model_score:.1f}/100 (uncalibrated)")
+                self.detect_details_lbl.setText(
+                    "Higher means more AI-like according to this model. This is not a percentage of AI-written "
+                    "text or a probability of authorship. No local accuracy validation has been performed. "
+                    f"Analyzed coverage: {result.analyzed_coverage_ratio:.0%}; windows: {len(result.window_results)}."
+                )
+            self.status_lbl.setText("Analysis complete.")
 
         def _on_accept_clicked(self):
-            res = self.doc_state.latest_rewrite_result
-            if res and res.candidate_blocks:
-                accepted_text = "\n\n".join(c.rewritten_text for c in res.candidate_blocks)
-                self.src_edit.setPlainText(accepted_text)
-                self.out_edit.clear()
+            result = self.doc_state.latest_rewrite_result
+            if (self._active_worker is None and self._pending_output is not None and result
+                    and result.snapshot_revision == self.doc_state.revision and not self.doc_state.is_result_stale):
+                self.src_edit.setPlainText(self._pending_output)
+                self._clear_rewrite()
                 self.status_lbl.setText("Changes accepted into source text.")
 
         def _on_reject_clicked(self):
-            self.out_edit.clear()
-            self.status_lbl.setText("Rewrite rejected. Kept original text.")
+            if self._active_worker is not None:
+                self._on_cancel_clicked()
+            self._clear_rewrite()
+            self.status_lbl.setText("Rewrite rejected; original text preserved.")
 
         def _on_cancel_clicked(self):
             self._cancel_event.set()
-            self.controller.cancel_active_job()
-            self.status_lbl.setText("Job cancelled by user.")
+            self._clear_rewrite()
+            self.status_lbl.setText("Cancellation requested; waiting for the current model operation to stop…")
             self.cancel_btn.setEnabled(False)
-            self.progress_bar.setVisible(False)
-            self.rephrase_btn.setEnabled(True)
 
         def _on_clear_session_clicked(self):
+            if self._active_worker is not None:
+                self._on_cancel_clicked()
             self.session_mgr.clear_session()
             self.src_edit.clear()
-            self.out_edit.clear()
+            self._clear_rewrite()
             self.detect_input.clear()
-            QMessageBox.information(self, "Session Cleared", "Session and text buffers have been cleared.")
+            self.detect_score_lbl.setText("Not analyzed")
+            self.detect_details_lbl.clear()
+
+        def closeEvent(self, event):
+            if self._active_worker is not None:
+                self._close_when_finished = True
+                self._on_cancel_clicked()
+                event.ignore()
+            else:
+                event.accept()
 
     return MainWindow()

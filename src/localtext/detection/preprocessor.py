@@ -122,7 +122,7 @@ class DetectionPreprocessor:
                 status_label=DetectorLabel.INSUFFICIENT_TEXT,
                 message=(
                     f"Input contains only {words} eligible prose words. "
-                    f"The detector requires at least {self.min_prose_words} words for reliable scoring."
+                    f"The configured minimum input length is {self.min_prose_words} prose words."
                 ),
             )
 
@@ -135,3 +135,4 @@ class DetectionPreprocessor:
             status_label=DetectorLabel.UNCERTAIN,  # Provisional until scored
             message=f"Eligible prose: {words} words across {len(eligible_spans)} spans.",
         )
+

@@ -1,3 +1,4 @@
 MODE: Natural
 GOAL: Rewrite in conversational, engaging prose with less formulaic or repetitive wording.
 CONSTRAINT: Preserve the author's original voice, perspective, facts, and conclusions. Target approximately 90-110% of source word length.
+

@@ -20,16 +20,9 @@ def launch_gui() -> int:
         window = create_qt_app()
         window.show()
         return app.exec()
-    except ImportError:
-        print(
-            "PySide6 is not installed in the current environment.\n"
-            "To launch the graphical desktop interface, install PySide6 or use the system package 'pyside6'.\n"
-            "Falling back to the LocalText CLI tool.\n",
-            file=sys.stderr,
-        )
-        from localtext.cli import main as cli_main
-        cli_main()
-        return 0
+    except ImportError as exc:
+        print(f"Cannot start the GUI: {exc}. Run scripts/setup_env.sh.", file=sys.stderr)
+        return 1
 
 
 def main() -> None:
@@ -38,8 +31,9 @@ def main() -> None:
         from localtext.cli import main as cli_main
         cli_main()
     else:
-        launch_gui()
+        raise SystemExit(launch_gui())
 
 
 if __name__ == "__main__":
     main()
+

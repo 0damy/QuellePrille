@@ -1,8 +1,6 @@
 """Complete rephrasing pipeline coordinating protection, chunking, generation, repair, and diffs.
 
-Adheres strictly to REP-01 through REP-11, AT-06, AT-07, AT-08, AT-10, and AT-14.
-Implements the exact 8-step pipeline from Section 8:
-Snapshot -> Protect -> Budget/Chunk -> Generate -> Validate -> 1 Bounded Repair -> Assemble -> Review.
+Preservation checks catch some defects but cannot establish semantic equivalence.
 """
 
 from __future__ import annotations
@@ -72,18 +70,16 @@ class RephrasePipeline:
                 failed_checks=["No target blocks provided in request."],
             )
 
+        def cancelled_result():
+            return RewriteResult(
+                job_id=request.job_id, snapshot_revision=request.snapshot_revision,
+                status=JobState.CANCELLED, warnings=["Job cancelled; output discarded."],
+                timings_ms={"total_ms": (time.perf_counter() - start_time) * 1000},
+            )
+
         for block in target_blocks:
             if cancel_event and cancel_event.is_set():
-                # Responsive cancellation (AT-10, NFR-07)
-                elapsed_ms = (time.perf_counter() - start_time) * 1000
-                return RewriteResult(
-                    job_id=request.job_id,
-                    snapshot_revision=request.snapshot_revision,
-                    status=JobState.CANCELLED,
-                    candidate_blocks=candidate_blocks,
-                    warnings=["Job cancelled by user."],
-                    timings_ms={"total_ms": elapsed_ms},
-                )
+                return cancelled_result()
 
             # Auto-detect entities + freeze words for this block
             auto_spans = self.protection_engine.detect_auto_protected_spans(block.source_text)
@@ -105,6 +101,8 @@ class RephrasePipeline:
 
             # Generate primary candidate
             raw_generated = generator_fn(user_prompt, sys_prompt)
+            if cancel_event and cancel_event.is_set():
+                return cancelled_result()
 
             # Restore protected content (REP-06, AT-06)
             unmasked_output, unmask_errors = self.protection_engine.unmask_text(
@@ -140,6 +138,8 @@ class RephrasePipeline:
 
                 # Attempt single repair request
                 repaired_raw = generator_fn(repair_prompt, sys_prompt)
+                if cancel_event and cancel_event.is_set():
+                    return cancelled_result()
                 repaired_unmasked, rep_unmask_errors = self.protection_engine.unmask_text(
                     repaired_raw, masked_items
                 )
@@ -159,6 +159,11 @@ class RephrasePipeline:
                     failed_block_checks.append(
                         "Repair attempt failed. Preserved original text to prevent factual distortion."
                     )
+
+            # Preserve boundary whitespace used between chunks.
+            leading = block.source_text[:len(block.source_text) - len(block.source_text.lstrip())]
+            trailing = block.source_text[len(block.source_text.rstrip()):]
+            final_text = leading + final_text.strip() + trailing
 
             # Compute rich HTML diff (REP-03)
             diff_html = self.diff_engine.render_html_diff(block.source_text, final_text)
@@ -191,3 +196,25 @@ class RephrasePipeline:
             warnings=all_warnings,
             timings_ms={"total_ms": elapsed_ms},
         )
+
+
+
+def assemble_rewrite(source: str, blocks: list[TargetBlock], result: RewriteResult) -> str:
+    """Replace verified source spans, preserving all intervening text and whitespace."""
+    if result.status not in {JobState.COMPLETE, JobState.PARTIAL}:
+        raise ValueError("Only finished rewrites can be accepted.")
+    candidates = {c.block_id: c for c in result.candidate_blocks}
+    if (len(candidates) != len(result.candidate_blocks)
+            or set(candidates) != {b.block_id for b in blocks}):
+        raise ValueError("Incomplete or duplicate rewrite blocks; source was preserved.")
+    previous_end = 0
+    pieces = []
+    for block in blocks:
+        span = block.source_span
+        if (span.start < previous_end or span.end > len(source)
+                or span.slice_from(source) != block.source_text):
+            raise ValueError("Rewrite does not match the source snapshot.")
+        pieces.extend([source[previous_end:span.start], candidates[block.block_id].rewritten_text])
+        previous_end = span.end
+    pieces.append(source[previous_end:])
+    return "".join(pieces)

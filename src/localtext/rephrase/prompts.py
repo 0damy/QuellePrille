@@ -13,13 +13,7 @@ from localtext.contracts import ChangeStrength, RephraseMode
 
 
 def get_prompts_dir() -> Path:
-    """Locate the project prompts directory."""
-    # Look relative to repository root
-    base = Path(__file__).resolve().parent.parent.parent.parent
-    p_dir = base / "prompts"
-    if p_dir.exists():
-        return p_dir
-    # Fallback to local package directory
+    """Locate the prompt data installed alongside this module."""
     return Path(__file__).resolve().parent / "prompts"
 
 
@@ -99,3 +93,4 @@ def build_user_prompt(
 
     lines.append("OUTPUT REWRITTEN TARGET TEXT ONLY:")
     return "\n\n".join(lines)
+
