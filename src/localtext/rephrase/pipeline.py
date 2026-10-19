@@ -111,11 +111,13 @@ class RephrasePipeline:
                 raw_generated, masked_items
             )
 
+            mode_val = request.mode.value if hasattr(request.mode, "value") else str(request.mode)
+
             # Run deterministic preservation checks (REP-07, REP-10, AT-07, AT-08)
             report = checker.check_preservation(
                 source_text=block.source_text,
                 candidate_text=unmasked_output,
-                mode=request.mode.value,
+                mode=mode_val,
             )
 
             final_text = unmasked_output
@@ -144,7 +146,7 @@ class RephrasePipeline:
                 repaired_report = checker.check_preservation(
                     source_text=block.source_text,
                     candidate_text=repaired_unmasked,
-                    mode=request.mode.value,
+                    mode=mode_val,
                 )
 
                 if repaired_report.passed and not rep_unmask_errors:

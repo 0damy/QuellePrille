@@ -38,20 +38,22 @@ def load_system_prompt() -> str:
     )
 
 
-def load_mode_prompt(mode: RephraseMode) -> str:
+def load_mode_prompt(mode: RephraseMode | str) -> str:
     """Load the specific mode instruction."""
-    filename = f"{mode.value}.txt"
+    mode_str = mode.value if hasattr(mode, "value") else str(mode).lower()
+    filename = f"{mode_str}.txt"
     p = get_prompts_dir() / "modes" / filename
     if p.exists():
         return p.read_text(encoding="utf-8").strip()
-    return f"MODE: {mode.value.capitalize()}\nRewrite the text while preserving all material claims and facts."
+    return f"MODE: {mode_str.capitalize()}\nRewrite the text while preserving all material claims and facts."
 
 
-def format_strength_instruction(strength: ChangeStrength) -> str:
+def format_strength_instruction(strength: ChangeStrength | str) -> str:
     """Generate change strength constraints (REP-02)."""
-    if strength == ChangeStrength.LOW:
+    s_val = (strength.value if hasattr(strength, "value") else str(strength)).lower()
+    if s_val == "low":
         return "STRENGTH: Low. Make only minimal, conservative adjustments to improve phrasing while keeping the original structure as close as possible."
-    elif strength == ChangeStrength.HIGH:
+    elif s_val == "high":
         return "STRENGTH: High. Substantially restructure sentences and vocabulary for maximum stylistic impact, but strictly adhere to meaning preservation."
     else:
         return "STRENGTH: Medium. Balance natural structural changes with preservation of vocabulary."
