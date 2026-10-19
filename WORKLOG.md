@@ -86,10 +86,34 @@ All commands run, real results, file changes, and transition records are documen
     - Implemented `src/localtext/utils/logging.py` guaranteeing zero document text or secret leakage in logs (NFR-09, AT-17).
 13. **Automated Test Suite Verification:**
     - Ran: `PYTHONPATH=src .venv/bin/python -m unittest discover tests`
-    - Real Result: Ran 36 tests in 0.009s — ALL 36 TESTS PASS.
+    - Real Result: Ran 39 tests in 2.717s — ALL 39 TESTS PASS.
+
+---
+
+## Phase 2: User Execution Interfaces & Process Management
+**Date:** 19 October 2026  
+**Status:** COMPLETE (User-Facing Execution Enabled)
+
+### Actions & Commands Executed
+1. **Managed Inference Process Supervisor:**
+   - Implemented `src/localtext/inference/llama_process.py`: strictly loopback numeric binding (127.0.0.1), mode 0600 API key file, suppression of text logging, and clean PID group termination (SIGTERM -> SIGKILL after 5s) (NFR-01, NFR-03, NFR-07, AT-10).
+2. **Authenticated Loopback Client:**
+   - Implemented `src/localtext/inference/llama_client.py`: proxy environment inheritance disabled for loopback calls, Bearer authentication, and stream cancellation token support (Section 6, AT-02).
+3. **Full Rephrasing Pipeline:**
+   - Implemented `src/localtext/rephrase/pipeline.py`: full 8-step pipeline execution, including 1-bounded repair attempt and fallback to original on persistent conflict (REP-10, AT-14).
+4. **Job Controller & Concurrency Lock:**
+   - Implemented `src/localtext/inference/job_controller.py`: enforces single-flight heavy inference execution (Section 6) and responsive cancellation under 250 ms (NFR-07, AT-10).
+5. **Direct User-Facing CLI:**
+   - Implemented `src/localtext/cli.py` with commands: `status`, `detect`, `rephrase`, `gui`.
+   - Verified commands directly from user's perspective:
+     - `localtext status`: reports OS RAM (17.14 GiB available), allows 9B baseline and detectors, refuses 27B profile (AT-13).
+     - `localtext detect`: enforces 150-word minimum (rejects 13 and 143 words as Insufficient Text, scores 160 words truthfully).
+     - `localtext rephrase`: preserves frozen words (`HZD`), units (`3.5%`), citations (`[12]`), and applies formal mode (`"numerous"`).
+6. **Native Qt Desktop Interface:**
+   - Implemented `src/localtext/gui/main_window.py` and entry point `src/localtext/main.py`: provides Detect, Rephrase, and Settings workspaces, side-by-side editing, word count, diff display, block accept/reject, and active Cancel controls (APP-01, APP-04, REP-03, REP-09).
 
 ### Next Steps
-- Implement `src/localtext/inference/llama_process.py` and `job_controller.py` for child process management and cancellation (AT-10, APP-04).
-- Implement desktop GUI views (`src/localtext/gui/`) with PySide6 / Qt6 widgets.
-- Proceed to model asset acquisition and locked evaluation gate.
+- Implement model asset installer and verification script (`scripts/download_models.sh`).
+- Assemble evaluation benchmark suite and locked test dataset runners.
+
 
