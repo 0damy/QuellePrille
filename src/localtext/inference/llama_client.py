@@ -42,6 +42,22 @@ class LlamaHttpClient:
         retries = Retry(total=2, backoff_factor=0.2, status_forcelist=[502, 503, 504])
         self.session.mount("http://", HTTPAdapter(max_retries=retries))
 
+    def is_reachable(self) -> bool:
+        """Check if local inference server is accepting loopback connections."""
+        try:
+            resp = self.session.get(f"{self.base_url}/health", timeout=1.0)
+            if resp.ok:
+                return True
+        except Exception:
+            pass
+
+        # Try base connection
+        try:
+            resp = self.session.get(self.base_url, timeout=1.0)
+            return True
+        except Exception:
+            return False
+
     def generate_completion(
         self,
         prompt: str,
@@ -72,6 +88,29 @@ class LlamaHttpClient:
                     json=payload,
                     timeout=self.timeout_seconds,
                 )
+                if resp.status_code == 404:
+                    # Fallback to OpenAI-compatible chat endpoint
+                    chat_url = f"{self.base_url}/v1/chat/completions"
+                    chat_payload = {
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    resp = self.session.post(
+                        chat_url,
+                        headers=headers,
+                        json=chat_payload,
+                        timeout=self.timeout_seconds,
+                    )
+                    if resp.ok:
+                        data = resp.json()
+                        choices = data.get("choices", [{}])
+                        msg = choices[0].get("message", {}).get("content", "")
+                        return self._clean_output(msg)
+
                 if resp.status_code == 401:
                     raise InferenceClientError("Request rejected: Unauthorized (AT-02). Invalid or missing API secret.")
                 if not resp.ok:
