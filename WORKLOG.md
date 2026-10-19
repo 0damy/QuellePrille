@@ -111,6 +111,11 @@ All commands run, real results, file changes, and transition records are documen
      - `localtext rephrase`: preserves frozen words (`HZD`), units (`3.5%`), citations (`[12]`), and applies formal mode (`"numerous"`).
 6. **Native Qt Desktop Interface:**
    - Implemented `src/localtext/gui/main_window.py` and entry point `src/localtext/main.py`: provides Detect, Rephrase, and Settings workspaces, side-by-side editing, word count, diff display, block accept/reject, and active Cancel controls (APP-01, APP-04, REP-03, REP-09).
+   - Rephrasing executed in asynchronous `QThread` ensuring responsive UI (APP-04, AT-10).
+   - Fixed PySide6 enum unwrap compatibility in combo boxes.
+   - Integrated `LlamaHttpClient` checking loopback inference listeners (port 8080 or port 11434) for full neural generation, and expanded sentence-level rephrasing transformations when running offline before model download.
+7. **Model Acquisition Script:**
+   - Implemented `scripts/download_models.sh` for one-time download of Qwen 3.5 9B Q6_K (~7.96 GB) and Desklib detector safetensors (~1.74 GB), with local GGUF linking support.
 
 ### Next Steps
 - Implement model asset installer and verification script (`scripts/download_models.sh`).
