@@ -13,3 +13,4 @@ if [ ! -d "${PROJECT_ROOT}/.venv" ]; then
 fi
 
 exec "${PROJECT_ROOT}/.venv/bin/python" -m localtext.main "$@"
+

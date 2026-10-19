@@ -13,3 +13,4 @@ Return only the rewritten target text. Do not add an explanation, title,
 quotation wrapper, reasoning transcript, or Markdown fence unless that
 content belongs to the source. If a stylistic request conflicts with
 meaning preservation, preserve meaning.
+

@@ -32,7 +32,7 @@ class DetectorCalibrator:
         tau_high: float = 70.0,
         scale_a: float = 1.0,
         bias_b: float = 0.0,
-        is_calibrated: bool = True,
+        is_calibrated: bool = False,
     ):
         if tau_low >= tau_high:
             raise ValueError(f"tau_low ({tau_low}) must be strictly less than tau_high ({tau_high})")
@@ -97,3 +97,4 @@ class DetectorCalibrator:
             tau_low=self.tau_low,
             tau_high=self.tau_high,
         )
+

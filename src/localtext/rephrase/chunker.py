@@ -85,7 +85,17 @@ class DocumentChunker:
         if current_span_start < span.end:
             sub_spans.append(TextSpan(start=current_span_start, end=span.end))
 
-        return sub_spans if sub_spans else [span]
+        # A sentence without punctuation can itself exceed the word budget.
+        bounded = []
+        for candidate in sub_spans or [span]:
+            words = list(re.finditer(r"\S+", candidate.slice_from(text)))
+            start = candidate.start
+            for index in range(self.max_chunk_words, len(words), self.max_chunk_words):
+                end = candidate.start + words[index].start()
+                bounded.append(TextSpan(start, end))
+                start = end
+            bounded.append(TextSpan(start, candidate.end))
+        return bounded
 
     def create_target_blocks(
         self,
@@ -192,3 +202,4 @@ class DocumentChunker:
                 return False  # Overlapping target blocks!
 
         return True
+

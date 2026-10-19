@@ -22,3 +22,4 @@ EOF
 chmod +x "${DESKTOP_DIR}/localtext.desktop"
 echo "✓ Installed user-level desktop entry at: ${DESKTOP_DIR}/localtext.desktop"
 echo "LocalText will now appear in your application launcher."
+

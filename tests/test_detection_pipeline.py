@@ -15,7 +15,7 @@ from localtext.detection.preprocessor import DetectionPreprocessor
 class TestDetectionPipeline(unittest.TestCase):
     def setUp(self):
         self.preprocessor = DetectionPreprocessor(supported_languages=("en",), min_prose_words=150)
-        self.calibrator = DetectorCalibrator(tau_low=30.0, tau_high=70.0)
+        self.calibrator = DetectorCalibrator(tau_low=30.0, tau_high=70.0, is_calibrated=True)
         self.pipeline = DetectionPipeline(
             preprocessor=self.preprocessor,
             calibrator=self.calibrator,
@@ -84,14 +84,14 @@ class TestDetectionPipeline(unittest.TestCase):
         loader = AuditedDetectorLoader()
 
         # Checkpoint with missing classifier head
-        corrupt_keys = {"deberta.encoder.layer.0.weight", "deberta.embeddings.word_embeddings.weight"}
+        corrupt_keys = {"model.encoder.layer.0.weight", "model.embeddings.word_embeddings.weight"}
         is_valid, errors = loader.audit_state_dict_keys(corrupt_keys)
         self.assertFalse(is_valid)
         self.assertTrue(any("classifier.weight" in e for e in errors))
 
         # Checkpoint with valid keys
         valid_keys = {
-            "deberta.encoder.layer.0.weight",
+            "model.encoder.layer.0.weight",
             "classifier.weight",
             "classifier.bias",
         }
@@ -102,3 +102,4 @@ class TestDetectionPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

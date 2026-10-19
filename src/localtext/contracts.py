@@ -190,6 +190,7 @@ class DetectionResult:
     validation_status: ValidationStatus = ValidationStatus.UNVALIDATED
     timings_ms: Dict[str, float] = field(default_factory=dict)
     analyzed_coverage_ratio: float = 0.0
+    raw_model_score: Optional[float] = None  # Uncalibrated sigmoid output, not authorship probability
 
 
 @dataclass(frozen=True)
@@ -233,3 +234,4 @@ class ModelManifest:
     supported_languages: Tuple[str, ...] = ("en",)
     calibration_id: str = ""
     validation_status: ValidationStatus = ValidationStatus.UNVALIDATED
+

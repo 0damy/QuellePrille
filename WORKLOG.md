@@ -122,3 +122,13 @@ All commands run, real results, file changes, and transition records are documen
 - Assemble evaluation benchmark suite and locked test dataset runners.
 
 
+
+
+
+## Repair review — 2026-10-19
+
+The uploaded master at `7f7b987` did not perform real detection: the default scorer supplied zero logits. The GUI silently used hard-coded substitutions when no server was reachable, and the CLI always used a demonstration generator. Earlier broad completion claims in this log are therefore not evidence of working model inference or accuracy.
+
+This repair connects GUI/CLI rephrasing to an explicitly selected local Ollama model through the chat API, adds an offline Desklib tensor adapter and tokenizer windows, removes invented calibration defaults, and protects source text against cancelled, stale, rejected or incomplete results. A single Qt worker owns each job until it actually exits. Setup now installs dependencies, downloads include tokenizer/config, and packaged distributions retain prompts.
+
+Validation: 57 unittest cases pass with Qt and detector dependencies installed; offscreen GUI lifecycle and acceptance checks, local HTTP streaming tests, and a tiny synthetic DeBERTa checkpoint are included. A wheel was built and its 11 prompt resources inspected. Shell scripts passed syntax checks. These results are implementation checks, not a production model accuracy or language-quality evaluation. Full Desklib weights, a real Ollama model, and Arch/Wayland/Python 3.14 have not been exercised here. See README.md for current scope and local smoke steps.

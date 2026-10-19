@@ -9,6 +9,8 @@ Verifies REP-10, NFR-07, and Acceptance Test AT-10:
 import threading
 import time
 import unittest
+from unittest.mock import Mock
+from localtext.inference.memory_guard import MemoryGuard
 from localtext.contracts import (
     ChangeStrength,
     JobState,
@@ -22,7 +24,7 @@ from localtext.inference.job_controller import ControllerBusyError, JobControlle
 
 class TestJobControllerAndCancellation(unittest.TestCase):
     def setUp(self):
-        self.controller = JobController()
+        self.controller = JobController(memory_guard=Mock(spec=MemoryGuard))
 
     def test_at10_responsive_cancellation(self):
         """AT-10: Cancel active job releases worker promptly."""
@@ -105,7 +107,7 @@ class TestJobControllerAndCancellation(unittest.TestCase):
 
         t1 = threading.Thread(target=lambda: self.controller.run_rephrase_job(req1, blocking_gen))
         t1.start()
-        job1_started.wait()
+        self.assertTrue(job1_started.wait(timeout=2))
 
         # Attempting to start job 2 concurrently must fail with ControllerBusyError
         with self.assertRaises(ControllerBusyError):
@@ -149,3 +151,4 @@ class TestJobControllerAndCancellation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
