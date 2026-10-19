@@ -11,6 +11,7 @@ Uses QThread workers to guarantee the GUI remains 100% responsive during generat
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 from typing import Optional
@@ -77,15 +78,21 @@ def create_qt_app() -> "MainWindow":
         def run(self):
             try:
                 from localtext.inference.llama_client import LlamaHttpClient
+                from localtext.inference.ollama_client import OllamaHttpClient
+
+                # Priority: llama-server on 8080, then ollama on 11434
+                active_client = None
+                backend_name = "none"
 
                 client_llama = LlamaHttpClient("http://127.0.0.1:8080")
-                client_ollama = LlamaHttpClient("http://127.0.0.1:11434")
-
-                active_client = None
                 if client_llama.is_reachable():
                     active_client = client_llama
-                elif client_ollama.is_reachable():
-                    active_client = client_ollama
+                    backend_name = "llama-server"
+                else:
+                    client_ollama = OllamaHttpClient("http://127.0.0.1:11434")
+                    if client_ollama.is_reachable():
+                        active_client = client_ollama
+                        backend_name = "ollama"
 
                 if active_client is not None:
                     # Full local neural model generation
@@ -96,8 +103,9 @@ def create_qt_app() -> "MainWindow":
                             cancel_event=self.cancel_event,
                         )
                 else:
-                    # Local rule-based paraphrasing engine (sentence-level synonyms and flow transformation)
-                    def generator_fn(prompt: str, sys_prompt: str) -> str:
+                    # Local rule-based fallback — no LLM server running
+                    def generator_fn(prompt: str, sys_prompt: str) -> str:  # type: ignore[misc]
+                        # Extract only the text from between the data delimiters
                         if "<<<DATA_START>>>" in prompt and "<<<DATA_END>>>" in prompt:
                             body = prompt.split("<<<DATA_START>>>")[1].split("<<<DATA_END>>>")[0].strip()
                         else:
@@ -109,40 +117,60 @@ def create_qt_app() -> "MainWindow":
                             else str(self.request.mode).lower()
                         )
 
-                        # German sentence-level and vocabulary transformations
+                        # German vocabulary and flow transformations (case-insensitive where needed)
                         if self.language == "de":
+                            import re as _re
                             res = body
-                            res = res.replace("große Mengen von", "erhebliche Volumina an")
-                            res = res.replace("große Mengen", "substanzielle Volumina")
-                            res = res.replace("in Frage", "zur Debatte")
-                            res = res.replace("Das Nutzen von einem", "Die Verwendung eines")
-                            res = res.replace("Das Nutzen von", "Die Nutzung von")
-                            res = res.replace("bietet einen Ansatz", "eröffnet die Möglichkeit")
-                            res = res.replace("wichtig ist", "von zentraler Bedeutung ist")
-                            res = res.replace("garantiert jedoch nicht automatisch", "gewährleistet indes keineswegs")
-                            res = res.replace("habe ich die Motivation", "besteht das Ziel")
-                            res = res.replace("zur digitalen Souveränität", "hinsichtlich der informationellen Selbstbestimmung")
+                            subs_de = [
+                                (r"\bgroßen Mengen von\b", "erheblichen Volumina an"),
+                                (r"\bgroße Mengen von\b", "erhebliche Volumina an"),
+                                (r"\bgroße Mengen\b", "substanzielle Volumina"),
+                                (r"\bin Frage\b", "zur Debatte"),
+                                (r"\bDas Nutzen von einem\b", "Die Verwendung eines"),
+                                (r"\bDas Nutzen von\b", "Die Nutzung von"),
+                                (r"\bbietet einen Ansatz\b", "eröffnet die Möglichkeit"),
+                                (r"\bwichtig ist\b", "von zentraler Bedeutung ist"),
+                                (r"\bgarantiert jedoch nicht automatisch\b", "gewährleistet indes keineswegs"),
+                                (r"\bhabe ich die Motivation\b", "besteht das Ziel"),
+                                (r"\bdie Motivation, die Möglichekeite\b", "Ziel, die Möglichkeiten"),
+                                (r"\bdie Möglichekeite\b", "die Möglichkeiten"),
+                                (r"\bzur digitalen Souveränität\b", "hinsichtlich der informationellen Selbstbestimmung"),
+                                (r"\bVerschiedenen Behörden\b", "verschiedenen Behörden"),
+                                (r"\bAbhängigkeit vom Anbieter\b", "Herstellerabhängigkeit"),
+                                (r"\beinschränkt die Handlungsfreiheit\b", "begrenzt die Entscheidungsfreiheit"),
+                                (r"\bzu verringern\b", "zu reduzieren"),
+                                (r"\bvollständig erhalten bleiben\b", "vollständig gewahrt bleiben"),
+                            ]
+                            for pattern, replacement in subs_de:
+                                res = _re.sub(pattern, replacement, res)
                             if mode_val == "formal":
-                                return f"Hinsichtlich der behördlichen Digitalisierung: {res}"
+                                res = "Im Kontext der öffentlichen Verwaltung: " + res
                             elif mode_val == "academic":
-                                return f"In der verwaltungswissenschaftlichen Praxis: {res}"
-                            else:
-                                return res
+                                res = "Aus verwaltungswissenschaftlicher Perspektive: " + res
+                            return res
                         else:
+                            import re as _re
                             res = body
-                            res = res.replace("large volumes of", "substantial volumes of")
-                            res = res.replace("a lot of", "numerous")
-                            res = res.replace("can't", "cannot")
-                            res = res.replace("in this context", "within this framework")
-                            res = res.replace("offers a potential approach", "provides a viable methodology")
-                            res = res.replace("does not automatically guarantee", "by no means ensures")
-                            res = res.replace("I have been motivated to", "the objective is to")
+                            subs_en = [
+                                (r"\blarge volumes of\b", "substantial volumes of"),
+                                (r"\ba lot of\b", "numerous"),
+                                (r"\bcan't\b", "cannot"),
+                                (r"\bin this context\b", "within this framework"),
+                                (r"\boffers? (?:a )?potential approach\b", "provides a viable methodology"),
+                                (r"\bdoes not automatically guarantee\b", "by no means ensures"),
+                                (r"\bI have been motivated to\b", "the objective is to"),
+                                (r"\bvendor lock-in\b", "supplier dependency"),
+                                (r"\bfreedom of action\b", "operational autonomy"),
+                                (r"\bopen document format\b", "open documentation standard", re.IGNORECASE),
+                            ]
+                            for entry in subs_en:
+                                flags = entry[2] if len(entry) > 2 else 0
+                                res = _re.sub(entry[0], entry[1], res, flags=flags)
                             if mode_val == "formal":
-                                return f"In institutional administrative contexts, {res}"
+                                res = "In institutional administrative contexts, " + res
                             elif mode_val == "academic":
-                                return f"In scholarly analysis, {res}"
-                            else:
-                                return res
+                                res = "In scholarly analysis, " + res
+                            return res
 
                 result = self.pipeline.run_rephrase(
                     request=self.request,

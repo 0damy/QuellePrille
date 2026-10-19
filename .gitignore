@@ -1,10 +1,46 @@
+# Python bytecode
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+
+# Virtual environments
 .venv/
+venv/
+
+# Tests and caches
 .pytest_cache/
-*.log
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build outputs
 *.egg-info/
 dist/
 build/
+
+# Logs and local application data
+*.log
 .localtext_data/
+
+# Downloaded model weights
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+pytorch_model*.bin
+
+# Credentials and local environment settings
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.idea/
